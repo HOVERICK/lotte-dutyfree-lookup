@@ -1,0 +1,264 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>워크숍 참여자 조회</title>
+
+<!-- CSV 파서 (Papa Parse) & XLSX 파서 (SheetJS) CDN -->
+<script src="https://cdn.jsdelivr.net/npm/papaparse@5.4.1/papaparse.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
+
+<style>
+  *{box-sizing:border-box}
+  body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"Noto Sans KR","Malgun Gothic",Arial,sans-serif;margin:0;background:#fafafa;color:#111}
+  header{position:sticky;top:0;background:#fff;border-bottom:1px solid #eee}
+  .wrap{max-width:920px;margin:0 auto;padding:20px}
+  h1{font-size:22px;margin:0 0 6px}
+  .sub{margin:0 0 14px;color:#666;font-size:14px}
+  .bar{display:flex;gap:8px;flex-wrap:wrap}
+  input[type="text"]{flex:1;min-width:220px;padding:12px 14px;border:1px solid #ddd;border-radius:10px;font-size:16px;outline:none}
+  button{padding:12px 14px;border:1px solid #ddd;background:#111;color:#fff;border-radius:10px;cursor:pointer;font-size:14px}
+  button.secondary{background:#fff;color:#111}
+  .hint{font-size:12px;color:#777;margin-top:6px}
+  .pill{display:inline-flex;align-items:center;gap:6px;border:1px solid #eee;border-radius:999px;padding:8px 10px;background:#fff}
+  .kvs{display:flex;gap:6px;flex-wrap:wrap;margin-top:8px}
+  main .count{color:#666;font-size:13px;margin:12px 0 0}
+  .card{background:#fff;border:1px solid #eee;border-radius:14px;padding:16px;margin-top:16px;box-shadow:0 1px 2px rgba(0,0,0,.04)}
+  .row{display:grid;grid-template-columns:120px 1fr;gap:8px;padding:8px 0;border-top:1px dashed #eee}
+  .row:first-child{border-top:0}
+  .label{color:#666}
+  .value{font-weight:600}
+  .empty{color:#999;padding:24px 0;text-align:center}
+  footer{color:#888;font-size:12px;text-align:center;padding:24px}
+  details{margin-top:14px}
+  summary{cursor:pointer;color:#333}
+  code{background:#fff4;border:1px solid #eee;border-radius:6px;padding:2px 6px}
+</style>
+</head>
+<body>
+<header>
+  <div class="wrap">
+    <h1>워크숍 참여자 조회</h1>
+    <p class="sub">레포의 <code>data/participants.csv</code> 또는 <code>data/participants.xlsx</code>를 자동 로드합니다. 이름으로 검색하면 <b>차수 / 성명 / 소속부문 / 부서명</b>이 표시됩니다.</p>
+    <div class="bar">
+      <input id="q" type="text" placeholder="예: 홍길동" enterkeyhint="search" autofocus>
+      <button id="btn">검색</button>
+      <button id="reload" class="secondary" title="데이터 재로딩">데이터 새로고침</button>
+    </div>
+    <div class="hint">
+      • GitHub Pages에 배포 후, 주소 끝에 <code>?name=홍길동</code>을 붙이면 자동 검색됩니다.<br>
+      • CSV 우선 로딩(있으면 CSV 사용, 없으면 XLSX 사용)
+    </div>
+    <div class="kvs" id="mapInfo"></div>
+    <div class="count" id="count"></div>
+  </div>
+</header>
+
+<main class="wrap">
+  <div id="results"></div>
+  <details>
+    <summary>업로드 가이드</summary>
+    <div class="hint">
+      1) 레포에 <code>data/participants.csv</code> 또는 <code>data/participants.xlsx</code> 업로드<br>
+      2) CSV 인코딩은 <b>UTF-8</b> 권장, 첫 줄에 헤더 포함<br>
+      3) 권장 헤더: <code>차수, 성명, 소속부문, 부서명</code><br>
+      4) 헤더가 달라도 자동 매핑(이름/소속/부서/팀명/회차 등)
+    </div>
+  </details>
+</main>
+
+<footer>ⓒ 야모이자 | 내부 조회용. 타인 정보 열람 금지</footer>
+
+<script>
+/* ===== 설정 ===== */
+const CSV_URL  = "data/participants.csv";
+const XLSX_URL = "data/participants.xlsx";
+
+/* ===== 별칭/필수 키 ===== */
+const required = ["차수","성명","소속부문","부서명"];
+const nameAliases = ["성명","이름","성명(한글)","신청자명","참여자명"];
+const divAliases  = ["소속부문","소속","소속(부문)","부문","소속 본부","소속부서(대)","소속부문명"];
+const deptAliases = ["부서명","부서","소속부서","팀명","소속(팀)","소속부서(소)"];
+const batchAliases= ["차수","회차","차수(신청)","신청차수"];
+
+/* ===== 상태 ===== */
+let rows = [];
+const q = document.getElementById("q");
+const btn = document.getElementById("btn");
+const reloadBtn = document.getElementById("reload");
+const results = document.getElementById("results");
+const count = document.getElementById("count");
+const mapInfo = document.getElementById("mapInfo");
+
+/* ===== 유틸 ===== */
+const norm = s => (s ?? "").toString().trim();
+const normKey = s => norm(s).replace(/\s+/g,"").toLowerCase();
+
+function showMapInfo(map){
+  mapInfo.innerHTML = "";
+  if (!map) return;
+  const frag = document.createDocumentFragment();
+  Object.entries(map).forEach(([need, found])=>{
+    const pill = document.createElement("div");
+    pill.className = "pill";
+    pill.innerHTML = `<b>${need}</b><span>←</span><span>${found || "미매핑"}</span>`;
+    frag.appendChild(pill);
+  });
+  mapInfo.appendChild(frag);
+}
+
+function buildMap(header){
+  const keys = header.map(h=>norm(h));
+  function find(aliasList){
+    // exact
+    for (const cand of aliasList){
+      const i = keys.findIndex(k => k === cand);
+      if (i !== -1) return header[i];
+    }
+    // contains (공백무시)
+    for (let i=0;i<header.length;i++){
+      for (const cand of aliasList){
+        if (normKey(header[i]).includes(normKey(cand))) return header[i];
+      }
+    }
+    return null;
+  }
+  return {
+    "성명": find(nameAliases),
+    "소속부문": find(divAliases),
+    "부서명": find(deptAliases),
+    "차수": find(batchAliases)
+  };
+}
+
+function ingest(header, data){
+  const map = buildMap(header);
+  showMapInfo(map);
+
+  const idx = {};
+  required.forEach(k => {
+    const src = map[k];
+    idx[k] = src ? header.indexOf(src) : -1;
+  });
+
+  const out = [];
+  for (const row of data){
+    const rec = {};
+    required.forEach(k=>{
+      const i = idx[k];
+      rec[k] = i>=0 && i<row.length ? norm(row[i]) : "";
+    });
+    if (rec["성명"]) out.push(rec);
+  }
+  rows = out;
+}
+
+/* ===== 렌더/검색 ===== */
+function render(items){
+  results.innerHTML = "";
+  if (!items.length){
+    results.innerHTML = '<div class="empty">검색 결과가 없습니다. 철자(공백 포함)를 확인해 주세요.</div>';
+    count.textContent = "";
+    return;
+  }
+  count.textContent = `${items.length}건이 검색되었습니다.`;
+  const frag = document.createDocumentFragment();
+  items.forEach(item=>{
+    const el = document.createElement("div");
+    el.className = "card";
+    el.innerHTML = `
+      <div class="row"><div class="label">차수</div><div class="value">${item["차수"]||""}</div></div>
+      <div class="row"><div class="label">성명</div><div class="value">${item["성명"]||""}</div></div>
+      <div class="row"><div class="label">소속부문</div><div class="value">${item["소속부문"]||""}</div></div>
+      <div class="row"><div class="label">부서명</div><div class="value">${item["부서명"]||""}</div></div>`;
+    frag.appendChild(el);
+  });
+  results.appendChild(frag);
+}
+
+function search(){
+  const term = norm(q.value);
+  if (!term){ render([]); return; }
+  const key = term.replace(/\s+/g,"").toLowerCase();
+  const items = rows.filter(r => (r["성명"]||"").replace(/\s+/g,"").toLowerCase().includes(key));
+  render(items);
+}
+
+/* ===== 데이터 로딩 (CSV → XLSX 순서) ===== */
+async function loadCSV(){
+  const res = await fetch(CSV_URL, {cache:"no-store"});
+  if (!res.ok) throw new Error("CSV 없음");
+  const text = await res.text();
+  return new Promise((resolve,reject)=>{
+    Papa.parse(text, {
+      header: true,
+      skipEmptyLines: true,
+      complete: (ret)=>{
+        const data = ret.data;
+        if (!data.length) return reject(new Error("CSV 빈 데이터"));
+        const header = ret.meta.fields;
+        const rowsArray = data.map(obj => header.map(h => obj[h]));
+        ingest(header, rowsArray);
+        resolve({type:"csv", count: rows.length});
+      },
+      error: err => reject(err)
+    });
+  });
+}
+
+async function loadXLSX(){
+  const res = await fetch(XLSX_URL, {cache:"no-store"});
+  if (!res.ok) throw new Error("XLSX 없음");
+  const arrayBuf = await res.arrayBuffer();
+  const wb = XLSX.read(arrayBuf, {type:"array"});
+  const wsname = wb.SheetNames[0];
+  const ws = wb.Sheets[wsname];
+  const json = XLSX.utils.sheet_to_json(ws, {header:1, defval:""});
+  if (!json.length) throw new Error("XLSX 빈 데이터");
+  const header = json[0].map(v => norm(v));
+  const data = json.slice(1);
+  ingest(header, data);
+  return {type:"xlsx", count: rows.length};
+}
+
+async function loadData(){
+  mapInfo.innerHTML = "";
+  count.textContent = "데이터 로딩 중...";
+  results.innerHTML = "";
+  rows = [];
+  // CSV 우선, 실패 시 XLSX
+  try {
+    const info = await loadCSV();
+    count.textContent = `CSV 로드 완료: ${info.count}건`;
+  } catch(e1){
+    try {
+      const info = await loadXLSX();
+      count.textContent = `XLSX 로드 완료: ${info.count}건`;
+    } catch(e2){
+      count.textContent = "데이터 파일을 찾을 수 없습니다. data/participants.csv 또는 participants.xlsx를 업로드하세요.";
+      results.innerHTML = "";
+    }
+  }
+}
+
+/* ===== 이벤트 바인딩 ===== */
+btn.addEventListener("click", search);
+q.addEventListener("keydown", e=>{ if (e.key === "Enter") search(); });
+q.addEventListener("input", ()=>{ if (q.value.length===0) render([]); });
+reloadBtn.addEventListener("click", loadData);
+
+/* ===== 초기화 ===== */
+(async function init(){
+  await loadData();
+  // URL ?name=홍길동 자동 검색
+  const params = new URLSearchParams(location.search);
+  const preset = params.get("name");
+  if (preset){
+    q.value = preset;
+    search();
+  }
+})();
+</script>
+</body>
+</html>
