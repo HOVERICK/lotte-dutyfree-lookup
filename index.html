@@ -12,9 +12,9 @@
 <style>
   *{box-sizing:border-box}
   body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"Noto Sans KR","Malgun Gothic",Arial,sans-serif;margin:0;background:#fafafa;color:#111}
-  .wrap{max-width:1000px;margin:0 auto;padding:28px}
+  .wrap{max-width:1100px;margin:0 auto;padding:28px}
   h1{font-size:22px;margin:0 0 16px}
-  .topbar{display:grid;grid-template-columns:1fr auto auto auto;gap:8px;align-items:center}
+  .topbar{display:grid;grid-template-columns:1fr auto auto auto auto;gap:8px;align-items:center}
   .search{display:flex;gap:8px}
   input[type="text"]{flex:1;padding:14px 16px;border:1px solid #ddd;border-radius:12px;font-size:16px;outline:none;background:#fff}
   select{padding:14px 16px;border:1px solid #ddd;border-radius:12px;background:#fff;font-size:15px}
@@ -22,28 +22,28 @@
   button.ghost, button.icon{background:#fff;color:#111}
   .count{color:#666;font-size:13px;margin-top:12px}
   .result-empty{color:#888;margin-top:12px}
-  .card{background:#fff;border:1px solid #eee;border-radius:14px;padding:16px;margin-top:16px;box-shadow:0 1px 2px rgba(0,0,0,.04)}
-  .row{display:grid;grid-template-columns:120px 1fr;gap:8px;padding:8px 0;border-top:1px dashed #eee}
-  .row:first-child{border-top:0}
-  .label{color:#666}
-  .value{font-weight:600}
 
-  .section{margin-top:28px}
-  .sec-head{display:flex;align-items:center;justify-content:space-between;margin-bottom:8px}
-  .sec-title{font-size:18px;font-weight:700}
+  /* 검색 결과: 표 + 페이저 */
   .table{width:100%;border-collapse:separate;border-spacing:0;background:#fff;border:1px solid #eee;border-radius:14px;overflow:hidden}
   .table th,.table td{padding:12px 12px;border-top:1px solid #f0f0f0;text-align:left;font-size:14px}
   .table th{background:#fafafa;color:#444;border-top:0}
   .table tr:hover td{background:#fafcff}
+  .pager{display:flex;gap:6px;flex-wrap:wrap;align-items:center;justify-content:flex-end;margin-top:10px}
+  .pager button{background:#fff;color:#111;border-radius:8px;padding:8px 10px}
+  .pager .active{background:#111;color:#fff}
 
+  /* 전체 명단(차수별 표) */
+  .section{margin-top:28px}
+  .sec-head{display:flex;align-items:center;justify-content:space-between;margin-bottom:8px}
+  .sec-title{font-size:18px;font-weight:700}
   .pill{display:inline-flex;align-items:center;gap:6px;border:1px solid #eee;border-radius:999px;padding:8px 10px;background:#fff}
-  .hidden{display:none}
 
-  /* 모달(초기엔 반드시 숨김) */
+  /* 모달(초기엔 숨김) */
   #modal{position:fixed;inset:0;background:rgba(0,0,0,.4);align-items:center;justify-content:center;padding:16px;display:none}
   #modal .box{max-width:520px;width:100%;background:#fff;border-radius:14px;border:1px solid #eee;padding:18px}
   #modal h2{margin:0 0 12px;font-size:18px}
   #mapRows{display:grid;grid-template-columns:140px 1fr;gap:10px;align-items:center;margin:10px 0}
+  .hidden{display:none}
 </style>
 </head>
 <body>
@@ -58,9 +58,14 @@
       <select id="batchFilter" title="차수 필터">
         <option value="ALL">전체 차수</option>
       </select>
+      <select id="pageSize" title="페이지당 표시 인원">
+        <option value="20">20명</option>
+        <option value="50" selected>50명</option>
+        <option value="100">100명</option>
+      </select>
 
-      <!-- 관리자 전용 버튼 묶음: 기본 숨김 -->
-      <div id="adminBtns" class="hidden" style="display:flex;gap:8px;justify-content:flex-end">
+      <!-- 관리자 전용 버튼 묶음: 기본 숨김(※ inline style 없음) -->
+      <div id="adminBtns" class="hidden">
         <button id="restore" class="ghost" title="숨긴 차수 복원">숨긴 차수 복원</button>
         <button id="saveConfig" class="ghost" title="숨긴 차수 저장(config.json)">숨긴 차수 저장</button>
       </div>
@@ -70,8 +75,18 @@
     </div>
 
     <div id="count" class="count hidden"></div>
-    <div id="results"></div>
-    <div id="empty" class="result-empty hidden">검색 결과가 없습니다. 철자(공백 포함)를 확인해 주세요.</div>
+
+    <!-- 검색 결과(표 + 페이저) -->
+    <div id="resultsWrap">
+      <table id="resultsTable" class="table hidden">
+        <thead>
+          <tr><th style="width:18%">차수</th><th style="width:20%">성명</th><th style="width:30%">소속부문</th><th>부서명</th></tr>
+        </thead>
+        <tbody id="resultsBody"></tbody>
+      </table>
+      <div id="empty" class="result-empty hidden">검색 결과가 없습니다. 철자(공백 포함)를 확인해 주세요.</div>
+      <div id="pager" class="pager hidden"></div>
+    </div>
 
     <!-- 전체 명단(차수별) -->
     <div id="roster" class="section">
@@ -117,11 +132,15 @@ let rawTable = [];
 let colMap = {};
 let manualNeeded = false;
 
-let hiddenBatchesGlobal = new Set();  // config.json에서 로드 (모든 방문자 공통)
-let hiddenBatchesWorking = new Set(); // 관리자에서 임시 작업용
+let hiddenBatchesGlobal = new Set();  // config.json 공통 숨김
+let hiddenBatchesWorking = new Set(); // 관리자 임시 작업용
 
 const params = new URLSearchParams(location.search);
 const isAdmin = params.get("admin") === "1";
+
+/* 검색 테이블 페이지 상태 */
+let pageSize = 50;
+let currentPage = 1;
 
 /* ===== 유틸 ===== */
 const $ = s => document.querySelector(s);
@@ -164,7 +183,18 @@ function applyMap(header,data,map){
   const out=[];
   for(const row of data){
     const rec={}; required.forEach(k=>{ const i=idx[k]; rec[k]=(i>=0&&i<row.length)?norm(row[i]):""; });
-    if(rec["성명"]) out.push(rec);
+    // 1) 이름이 없으면 제외
+    if(!rec["성명"]) continue;
+    // 2) 헤더/가짜행 제거 (성명=성명/이름/신청자명/참여자명 등)
+    const headerNames = ["성명","이름","신청자명","참여자명","성 명"];
+    if(headerNames.includes(rec["성명"])) continue;
+    // 3) 네 컬럼이 모두 헤더처럼 보이면 제거
+    const looksHeader = ["차수","회차"].includes(rec["차수"]) &&
+                        headerNames.includes(rec["성명"]) &&
+                        aliases["소속부문"].some(a=>normKey(a)===normKey(rec["소속부문"])) &&
+                        aliases["부서명"].some(a=>normKey(a)===normKey(rec["부서명"]));
+    if(looksHeader) continue;
+    out.push(rec);
   }
   return out;
 }
@@ -204,10 +234,9 @@ async function loadData(){
   rows=applyMap(header,data,colMap);
 }
 
-/* ===== 검색/필터 ===== */
-function effectiveHidden(){
-  return isAdmin ? hiddenBatchesWorking : hiddenBatchesGlobal;
-}
+/* ===== 검색/필터 + 페이지네이션 ===== */
+function effectiveHidden(){ return isAdmin ? hiddenBatchesWorking : hiddenBatchesGlobal; }
+
 function filteredSearchItems(){
   const term=norm($("#q").value);
   const key=term.replace(/\s+/g,"").toLowerCase();
@@ -220,26 +249,52 @@ function filteredSearchItems(){
     return okName && okBatch;
   });
 }
-function renderSearch(){
-  const list=filteredSearchItems();
-  const results=$("#results"), count=$("#count"), empty=$("#empty");
-  results.innerHTML="";
-  if(!list.length){ count.classList.add("hidden"); empty.classList.remove("hidden"); return; }
-  empty.classList.add("hidden"); count.textContent=`${list.length}건이 검색되었습니다.`; count.classList.remove("hidden");
 
-  const frag=document.createDocumentFragment();
-  list.forEach(item=>{
-    const el=document.createElement("div");
-    el.className="card";
-    el.innerHTML=`
-      <div class="row"><div class="label">차수</div><div class="value">${item["차수"]||""}</div></div>
-      <div class="row"><div class="label">성명</div><div class="value">${item["성명"]||""}</div></div>
-      <div class="row"><div class="label">소속부문</div><div class="value">${item["소속부문"]||""}</div></div>
-      <div class="row"><div class="label">부서명</div><div class="value">${item["부서명"]||""}</div></div>`;
-    frag.appendChild(el);
+function renderTable(items){
+  const tbl=$("#resultsTable"), body=$("#resultsBody"), pager=$("#pager"), count=$("#count"), empty=$("#empty");
+  body.innerHTML=""; pager.innerHTML="";
+  if(!items.length){
+    tbl.classList.add("hidden"); pager.classList.add("hidden");
+    count.classList.add("hidden"); empty.classList.remove("hidden");
+    return;
+  }
+  empty.classList.add("hidden");
+  count.textContent = `${items.length}건이 검색되었습니다.`;
+  count.classList.remove("hidden");
+  tbl.classList.remove("hidden");
+
+  const total = items.length;
+  const pages = Math.max(1, Math.ceil(total / pageSize));
+  if(currentPage > pages) currentPage = pages;
+  const start = (currentPage-1)*pageSize;
+  const slice = items.slice(start, start+pageSize);
+
+  slice.forEach(r=>{
+    const tr=document.createElement("tr");
+    tr.innerHTML=`<td>${r["차수"]||""}</td><td>${r["성명"]||""}</td><td>${r["소속부문"]||""}</td><td>${r["부서명"]||""}</td>`;
+    body.appendChild(tr);
   });
-  results.appendChild(frag);
+
+  // pager
+  pager.classList.remove("hidden");
+  const btn = (txt, pg, disabled=false, active=false)=>{
+    const b=document.createElement("button");
+    b.textContent=txt;
+    if(active) b.classList.add("active");
+    b.disabled=disabled;
+    b.addEventListener("click",()=>{ currentPage=pg; renderTable(items); });
+    pager.appendChild(b);
+  };
+  btn("이전", Math.max(1,currentPage-1), currentPage===1, false);
+  const windowSize = 7;
+  let s = Math.max(1, currentPage - Math.floor(windowSize/2));
+  let e = Math.min(pages, s + windowSize - 1);
+  if(e - s + 1 < windowSize){ s = Math.max(1, e - windowSize + 1); }
+  for(let p=s; p<=e; p++) btn(String(p), p, false, p===currentPage);
+  btn("다음", Math.min(pages,currentPage+1), currentPage===pages, false);
 }
+
+function renderSearch(){ renderTable(filteredSearchItems()); }
 
 /* ===== 전체 명단(차수별) ===== */
 function populateBatchFilter(){
@@ -311,9 +366,10 @@ function downloadConfig(){
 }
 
 /* ===== 이벤트 ===== */
-$("#btn").addEventListener("click", renderSearch);
-$("#q").addEventListener("keydown", e=>{ if(e.key==="Enter") renderSearch(); });
-$("#batchFilter").addEventListener("change", renderSearch);
+$("#btn").addEventListener("click", ()=>{ currentPage=1; renderSearch(); });
+$("#q").addEventListener("keydown", e=>{ if(e.key==="Enter"){ currentPage=1; renderSearch(); } });
+$("#batchFilter").addEventListener("change", ()=>{ currentPage=1; renderSearch(); });
+$("#pageSize").addEventListener("change", ()=>{ pageSize=parseInt($("#pageSize").value,10)||50; currentPage=1; renderSearch(); });
 $("#gear").addEventListener("click", openMapModal);
 $("#cancel").addEventListener("click", closeMapModal);
 $("#saveMap").addEventListener("click", ()=>{
@@ -321,7 +377,7 @@ $("#saveMap").addEventListener("click", ()=>{
   const header=(rawTable[headerIdx]||[]).map(v=>norm(v));
   const data=rawTable.slice(headerIdx+1);
   rows=applyMap(header,data,colMap);
-  closeMapModal(); populateBatchFilter(); renderSearch(); renderRoster();
+  closeMapModal(); populateBatchFilter(); currentPage=1; renderSearch(); renderRoster();
 });
 $("#restore").addEventListener("click", ()=>{
   const all=sortBatches(unique(rows.map(r=>r["차수"]).filter(Boolean)));
@@ -340,12 +396,13 @@ $("#saveConfig").addEventListener("click", downloadConfig);
 
   await loadData();
   populateBatchFilter();
-  renderSearch();
-  renderRoster();
+  currentPage=1;
+  renderSearch();   // 검색 영역(표 + 페이저)
+  renderRoster();   // 전체 명단
 
   // URL ?name=홍길동 자동 검색
   const preset=params.get("name");
-  if(preset){ $("#q").value=preset; renderSearch(); }
+  if(preset){ $("#q").value=preset; currentPage=1; renderSearch(); }
 })();
 </script>
 </body>
