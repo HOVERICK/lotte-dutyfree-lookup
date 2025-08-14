@@ -1,0 +1,342 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>워크숍 참여자 조회</title>
+
+<!-- CSV/XLSX 파서 -->
+<script src="https://cdn.jsdelivr.net/npm/papaparse@5.4.1/papaparse.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
+
+<style>
+  *{box-sizing:border-box}
+  body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"Noto Sans KR","Malgun Gothic",Arial,sans-serif;margin:0;background:#fafafa;color:#111}
+  .wrap{max-width:1000px;margin:0 auto;padding:28px}
+  h1{font-size:22px;margin:0 0 16px}
+  .topbar{display:grid;grid-template-columns:1fr auto auto auto;gap:8px;align-items:center}
+  .search{display:flex;gap:8px}
+  input[type="text"]{flex:1;padding:14px 16px;border:1px solid #ddd;border-radius:12px;font-size:16px;outline:none;background:#fff}
+  select{padding:14px 16px;border:1px solid #ddd;border-radius:12px;background:#fff;font-size:15px}
+  button{padding:14px 16px;border:1px solid #ddd;background:#111;color:#fff;border-radius:12px;cursor:pointer;font-size:15px}
+  button.ghost{background:#fff;color:#111}
+  button.icon{background:#fff;color:#111}
+  .count{color:#666;font-size:13px;margin-top:12px}
+  .result-empty{color:#888;margin-top:12px}
+  .card{background:#fff;border:1px solid #eee;border-radius:14px;padding:16px;margin-top:16px;box-shadow:0 1px 2px rgba(0,0,0,.04)}
+  .row{display:grid;grid-template-columns:120px 1fr;gap:8px;padding:8px 0;border-top:1px dashed #eee}
+  .row:first-child{border-top:0}
+  .label{color:#666}
+  .value{font-weight:600}
+
+  .section{margin-top:28px}
+  .sec-head{display:flex;align-items:center;justify-content:space-between;margin-bottom:8px}
+  .sec-title{font-size:18px;font-weight:700}
+  .table{width:100%;border-collapse:separate;border-spacing:0;background:#fff;border:1px solid #eee;border-radius:14px;overflow:hidden}
+  .table th,.table td{padding:12px 12px;border-top:1px solid #f0f0f0;text-align:left;font-size:14px}
+  .table th{background:#fafafa;color:#444;border-top:0}
+  .table tr:hover td{background:#fafcff}
+  .pill{display:inline-flex;align-items:center;gap:6px;border:1px solid #eee;border-radius:999px;padding:8px 10px;background:#fff}
+  .hidden{display:none}
+  .top-actions{display:flex;gap:8px;justify-content:flex-end;margin-top:8px}
+</style>
+</head>
+<body>
+  <div class="wrap">
+    <h1>워크숍 참여자 조회</h1>
+
+    <div class="topbar">
+      <div class="search">
+        <input id="q" type="text" placeholder="이름을 입력하세요 (예: 홍길동)" enterkeyhint="search" autofocus>
+        <button id="btn">검색</button>
+      </div>
+      <select id="batchFilter" title="차수 필터">
+        <option value="ALL">전체 차수</option>
+      </select>
+      <div id="adminBtns" class="top-actions hidden">
+        <button id="restore" class="ghost" title="숨긴 차수 복원">숨긴 차수 복원</button>
+        <button id="saveConfig" class="ghost" title="숨긴 차수 저장(config.json)">숨긴 차수 저장</button>
+      </div>
+      <button id="gear" class="icon hidden" title="수동 매핑(헤더 지정)">⚙️</button>
+    </div>
+
+    <div id="count" class="count hidden"></div>
+    <div id="results"></div>
+    <div id="empty" class="result-empty hidden">검색 결과가 없습니다. 철자(공백 포함)를 확인해 주세요.</div>
+
+    <!-- 전체 명단(차수별) -->
+    <div id="roster" class="section">
+      <div class="sec-head">
+        <div class="sec-title">전체 명단</div>
+        <div class="pill" id="rosterInfo"></div>
+      </div>
+      <div id="rosterBody"></div>
+    </div>
+  </div>
+
+  <!-- 수동 매핑 모달 -->
+  <div id="modal" class="hidden" style="position:fixed;inset:0;background:rgba(0,0,0,.4);display:flex;align-items:center;justify-content:center;padding:16px">
+    <div style="max-width:520px;width:100%;background:#fff;border-radius:14px;border:1px solid #eee;padding:18px">
+      <h2 style="margin:0 0 12px;font-size:18px">열 매핑 설정</h2>
+      <div id="mapRows" style="display:grid;grid-template-columns:140px 1fr;gap:10px;align-items:center;margin:10px 0"></div>
+      <div class="top-actions">
+        <button id="cancel" class="ghost">취소</button>
+        <button id="saveMap">저장</button>
+      </div>
+    </div>
+  </div>
+
+<script>
+/* ===== 설정 ===== */
+const CSV_URL  = "data/participants.csv";
+const XLSX_URL = "data/participants.xlsx";
+const CONFIG_URL = "data/config.json"; // {"hidden_batches":["1차수","2차수"]}
+
+/* ===== 별칭 ===== */
+const aliases = {
+  "성명": ["성명","이름","성명(한글)","신청자명","참여자명","성 명"],
+  "소속부문": ["소속부문","소속","소속(부문)","부문","소속 본부","소속부서(대)","소속부문명","본부","부 문"],
+  "부서명": ["부서명","부서","소속부서","팀명","소속(팀)","소속부서(소)","팀","부 서"],
+  "차수": ["차수","회차","차수(신청)","신청차수","차 수"]
+};
+const required = ["차수","성명","소속부문","부서명"];
+
+/* ===== 상태 ===== */
+let rows = [];
+let headerRaw = [];
+let rawTable = [];
+let colMap = {};
+let manualNeeded = false;
+
+// 전역 숨김: config.json에서 로드 → 전 방문자 공통
+let hiddenBatchesGlobal = new Set();
+// 관리자 모드에서 작업 중인(임시) 숨김 목록
+let hiddenBatchesWorking = new Set();
+
+const params = new URLSearchParams(location.search);
+const isAdmin = params.get("admin") === "1";
+
+/* ===== 유틸 ===== */
+const $ = s => document.querySelector(s);
+const norm = s => (s ?? "").toString().trim();
+const normKey = s => norm(s).replace(/\s+/g,"").toLowerCase();
+function unique(arr){ return Array.from(new Set(arr)); }
+function toNumberFirst(s){ const m=(s||"").match(/\\d+/); return m ? parseInt(m[0],10) : Number.POSITIVE_INFINITY; }
+function sortBatches(list){ return list.slice().sort((a,b)=>{ const na=toNumberFirst(a), nb=toNumberFirst(b); if(na!==nb) return na-nb; return (a||\"\").localeCompare(b||\"ko\"); }); }
+
+/* ===== 헤더 자동 탐색/매핑 ===== */
+function scoreHeader(cells){
+  let score=0; const set=cells.map(c=>normKey(c));
+  for(const want of required){
+    const list=aliases[want];
+    const hit=set.some(v=>list.some(a=>v.includes(normKey(a))));
+    if(hit) score++;
+  }
+  return score;
+}
+function pickHeaderIndex(matrix){
+  let best={idx:0,score:-1};
+  for(let i=0;i<Math.min(matrix.length,30);i++){
+    const row=matrix[i]||[]; const nonEmpty=row.filter(v=>norm(v).length>0).length;
+    if(nonEmpty<2) continue;
+    const sc=scoreHeader(row);
+    if(sc>best.score) best={idx:i,score:sc};
+  }
+  return best.score>=2 ? best.idx : 0;
+}
+function buildAutoMap(header){
+  const map={};
+  for(const want of required){
+    const cand=header.find(h=>aliases[want].some(a=>normKey(h).includes(normKey(a))));
+    map[want]=cand||null;
+  }
+  return map;
+}
+function applyMap(header,data,map){
+  const idx={}; required.forEach(k=>{ idx[k]=map[k]?header.indexOf(map[k]):-1; });
+  const out=[];
+  for(const row of data){
+    const rec={}; required.forEach(k=>{ const i=idx[k]; rec[k]=(i>=0&&i<row.length)?norm(row[i]):\"\"; });
+    if(rec[\"성명\"]) out.push(rec);
+  }
+  return out;
+}
+
+/* ===== 데이터 로딩 ===== */
+async function fetchText(url){ const r=await fetch(url,{cache:\"no-store\"}); if(!r.ok) throw new Error(\"not found\"); return await r.text(); }
+async function fetchArrayBuffer(url){ const r=await fetch(url,{cache:\"no-store\"}); if(!r.ok) throw new Error(\"not found\"); return await r.arrayBuffer(); }
+async function loadCSV(){ const t=await fetchText(CSV_URL); const p=Papa.parse(t,{header:false,skipEmptyLines:true}); return p.data; }
+async function loadXLSX(){ const b=await fetchArrayBuffer(XLSX_URL); const wb=XLSX.read(b,{type:\"array\"}); const ws=wb.Sheets[wb.SheetNames[0]]; return XLSX.utils.sheet_to_json(ws,{header:1,defval:\"\"}); }
+async function loadConfig(){
+  try{
+    const t=await fetchText(CONFIG_URL);
+    const json=JSON.parse(t);
+    hiddenBatchesGlobal = new Set((json.hidden_batches||[]).map(norm));
+    // 작업 세트 초기화(관리자만)
+    hiddenBatchesWorking = new Set(hiddenBatchesGlobal);
+  }catch(e){
+    hiddenBatchesGlobal = new Set();
+    hiddenBatchesWorking = new Set();
+  }
+}
+
+async function loadData(){
+  await loadConfig();
+  rawTable=[];
+  try{ rawTable=await loadCSV(); }catch(e1){ try{ rawTable=await loadXLSX(); }catch(e2){ rawTable=[]; } }
+  if(!rawTable.length){ rows=[]; return; }
+
+  const headerIdx=pickHeaderIndex(rawTable);
+  const header=(rawTable[headerIdx]||[]).map(v=>norm(v));
+  const data=rawTable.slice(headerIdx+1);
+  headerRaw=header.slice();
+  colMap=buildAutoMap(header);
+  manualNeeded=required.some(k=>!colMap[k]);
+  $(\"#gear\").classList.toggle(\"hidden\", !manualNeeded);
+  rows=applyMap(header,data,colMap);
+}
+
+/* ===== 검색 ===== */
+function getEffectiveHiddenSet(){
+  // 방문자: 전역(config.json)만 적용
+  // 관리자: 작업 중인 목록(버튼으로 조정) 적용
+  return isAdmin ? hiddenBatchesWorking : hiddenBatchesGlobal;
+}
+function filteredSearchItems(){
+  const term=norm($(\"#q\").value);
+  const key=term.replace(/\\s+/g,\"\").toLowerCase();
+  const sel=$(\"#batchFilter\").value; // ALL or batch
+  const hidden=getEffectiveHiddenSet();
+  return rows.filter(r=>{
+    if(hidden.has(norm(r[\"차수\"]))){ return false; }
+    const byName= key ? (r[\"성명\"]||\"\").replace(/\\s+/g,\"\").toLowerCase().includes(key) : true;
+    const byBatch= sel===\"ALL\" ? true : (r[\"차수\"]===sel);
+    return byName && byBatch;
+  });
+}
+function renderSearch(){
+  const list=filteredSearchItems();
+  const results=$(\"#results\"); const count=$(\"#count\"); const empty=$(\"#empty\");
+  results.innerHTML=\"\"; if(!list.length){ count.classList.add(\"hidden\"); empty.classList.remove(\"hidden\"); return; }
+  empty.classList.add(\"hidden\"); count.textContent=`${list.length}건이 검색되었습니다.`; count.classList.remove(\"hidden\");
+  const frag=document.createDocumentFragment();
+  list.forEach(item=>{
+    const el=document.createElement(\"div\"); el.className=\"card\";
+    el.innerHTML=`
+      <div class=\"row\"><div class=\"label\">차수</div><div class=\"value\">${item[\"차수\"]||\"\"}</div></div>
+      <div class=\"row\"><div class=\"label\">성명</div><div class=\"value\">${item[\"성명\"]||\"\"}</div></div>
+      <div class=\"row\"><div class=\"label\">소속부문</div><div class=\"value\">${item[\"소속부문\"]||\"\"}</div></div>
+      <div class=\"row\"><div class=\"label\">부서명</div><div class=\"value\">${item[\"부서명\"]||\"\"}</div></div>`;
+    frag.appendChild(el);
+  });
+  results.appendChild(frag);
+}
+
+/* ===== 전체 명단(차수별) ===== */
+function populateBatchFilter(){
+  const sel=$(\"#batchFilter\"); const prev=sel.value||\"ALL\";
+  const all=sortBatches(unique(rows.map(r=>r[\"차수\"]).filter(Boolean)));
+  sel.innerHTML=`<option value=\"ALL\">전체 차수</option>` + all.map(b=>`<option value=\"${b}\">${b}</option>`).join(\"\");
+  if([\"ALL\",...all].includes(prev)) sel.value=prev; else sel.value=\"ALL\";
+}
+function renderRoster(){
+  const body=$(\"#rosterBody\"); const info=$(\"#rosterInfo\"); body.innerHTML=\"\";
+  const hidden=getEffectiveHiddenSet();
+  const all=sortBatches(unique(rows.map(r=>r[\"차수\"]).filter(Boolean)));
+  const shown=all.filter(b=>!hidden.has(norm(b)));
+  info.textContent = `표시 중: ${shown.length}개 차수`;
+
+  all.forEach(batch=>{
+    if(hidden.has(norm(batch))) return;
+    const items = rows.filter(r=>r[\"차수\"]===batch);
+
+    const sec=document.createElement(\"section\"); sec.className=\"section\";
+    const head=document.createElement(\"div\"); head.className=\"sec-head\";
+    head.innerHTML=`<div class=\"sec-title\">${batch}</div>`;
+
+    if(isAdmin){
+      const hideBtn=document.createElement(\"button\"); hideBtn.className=\"ghost\"; hideBtn.textContent=\"이 차수 숨기기\";
+      hideBtn.addEventListener(\"click\",()=>{ hiddenBatchesWorking.add(norm(batch)); renderRoster(); renderSearch(); });
+      head.appendChild(hideBtn);
+    }
+    sec.appendChild(head);
+
+    const table=document.createElement(\"table\"); table.className=\"table\";
+    table.innerHTML=`
+      <thead>
+        <tr><th style=\"width:18%\">차수</th><th style=\"width:20%\">성명</th><th style=\"width:30%\">소속부문</th><th>부서명</th></tr>
+      </thead><tbody></tbody>`;
+    const tb=table.querySelector(\"tbody\");
+    items.forEach(r=>{
+      const tr=document.createElement(\"tr\");
+      tr.innerHTML=`<td>${r[\"차수\"]||\"\"}</td><td>${r[\"성명\"]||\"\"}</td><td>${r[\"소속부문\"]||\"\"}</td><td>${r[\"부서명\"]||\"\"}</td>`;
+      tb.appendChild(tr);
+    });
+    sec.appendChild(table); body.appendChild(sec);
+  });
+}
+
+/* ===== 수동 매핑(UI) ===== */
+function openMapModal(){
+  const modal=$(\"#modal\"); modal.classList.remove(\"hidden\");
+  const mapRows=$(\"#mapRows\"); mapRows.innerHTML=\"\";
+  required.forEach(want=>{
+    const label=document.createElement(\"div\"); label.textContent=want;
+    const sel=document.createElement(\"select\"); const optNone=document.createElement(\"option\"); optNone.value=\"\"; optNone.textContent=\"(선택 없음)\"; sel.appendChild(optNone);
+    headerRaw.forEach(h=>{ const op=document.createElement(\"option\"); op.value=h; op.textContent=h; if(colMap[want]===h) op.selected=true; sel.appendChild(op); });
+    sel.addEventListener(\"change\",()=>{ colMap[want]=sel.value||null; });
+    mapRows.appendChild(label); mapRows.appendChild(sel);
+  });
+}
+function closeMapModal(){ $(\"#modal\").classList.add(\"hidden\"); }
+
+/* ===== config.json 저장(관리자) ===== */
+function downloadConfig(){
+  const json = JSON.stringify({ hidden_batches: Array.from(hiddenBatchesWorking) }, null, 2);
+  const blob = new Blob([json], {type:\"application/json;charset=utf-8\"});
+  const a = document.createElement(\"a\");
+  a.href = URL.createObjectURL(blob);
+  a.download = \"config.json\";
+  a.click(); URL.revokeObjectURL(a.href);
+  alert(\"config.json이 내려받기 되었습니다. data/config.json으로 업로드하면 전 방문자에게 적용됩니다.\");
+}
+
+/* ===== 이벤트 ===== */
+$(\"#btn\").addEventListener(\"click\", ()=>{ renderSearch(); });
+$(\"#q\").addEventListener(\"keydown\", e=>{ if(e.key===\"Enter\") renderSearch(); });
+$(\"#batchFilter\").addEventListener(\"change\", ()=>{ renderSearch(); });
+$(\"#gear\").addEventListener(\"click\", openMapModal);
+$(\"#cancel\").addEventListener(\"click\", closeMapModal);
+$(\"#saveMap\").addEventListener(\"click\", ()=>{
+  const headerIdx=pickHeaderIndex(rawTable);
+  const header=(rawTable[headerIdx]||[]).map(v=>norm(v));
+  const data=rawTable.slice(headerIdx+1);
+  rows=applyMap(header,data,colMap);
+  closeMapModal(); populateBatchFilter(); renderSearch(); renderRoster();
+});
+$(\"#restore\").addEventListener(\"click\", ()=>{
+  // 관리자: 숨긴 차수 복원(프롬프트)
+  const all=sortBatches(unique(rows.map(r=>r[\"차수\"]).filter(Boolean)));
+  const hidden=all.filter(b=>hiddenBatchesWorking.has(norm(b)));
+  if(!hidden.length){ alert(\"숨긴 차수가 없습니다.\"); return; }
+  const name=prompt(`복원할 차수를 입력하세요:\\n${hidden.join(\", \")}`);
+  if(!name) return;
+  hiddenBatchesWorking.delete(norm(name)); renderRoster(); renderSearch();
+});
+$(\"#saveConfig\").addEventListener(\"click\", downloadConfig);
+
+/* ===== 초기화 ===== */
+(async function init(){
+  await loadData();
+  // 관리자 모드 버튼 표시
+  if(isAdmin){ $(\"#adminBtns\").classList.remove(\"hidden\"); }
+  populateBatchFilter();
+  renderSearch();
+  renderRoster();
+
+  // URL ?name=홍길동 자동 검색
+  const preset=params.get(\"name\"); if(preset){ $(\"#q\").value=preset; renderSearch(); }
+})();
+</script>
+</body>
+</html>
