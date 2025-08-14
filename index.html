@@ -18,20 +18,20 @@
   .topbar{display:grid;grid-template-columns:1fr auto auto auto;gap:8px;align-items:center}
   .search{display:flex;gap:8px}
   input[type="text"]{flex:1;padding:14px 16px;border:1px solid #ddd;border-radius:12px;font-size:16px;outline:none;background:#fff}
-  select{padding:14px 16px;border:1px solid #ddd;border-radius:12px;background:#fff;font-size:15px}
-  button{padding:14px 16px;border:1px solid #ddd;background:#111;color:#fff;border-radius:12px;cursor:pointer;font-size:15px;white-space:nowrap;word-break:keep-all}
-  button.ghost,button.icon{background:#fff;color:#111}
+  select{padding:14px 16px;border:1px solid #ddd;border-radius:12px;background:#fff;font-size:15px;white-space:nowrap}
+  button{padding:14px 16px;border:1px solid #ddd;background:#111;color:#fff;border-radius:12px;cursor:pointer;font-size:15px;white-space:nowrap} /* ← 모바일 줄바꿈 방지 */
+  button.ghost, button.icon{background:#fff;color:#111}
   .count{color:#666;font-size:13px;margin-top:12px}
   .result-empty{color:#888;margin-top:12px}
 
   /* 검색 결과: 표 + 페이저 */
   #resultsWrap{overflow-x:auto;-webkit-overflow-scrolling:touch}
-  .table{width:100%;table-layout:fixed;border-collapse:separate;border-spacing:0;background:#fff;border:1px solid #eee;border-radius:14px;overflow:hidden;min-width:720px}
+  .table{width:100%;table-layout:fixed;min-width:720px;border-collapse:separate;border-spacing:0;background:#fff;border:1px solid #eee;border-radius:14px;overflow:hidden}
   .table th,.table td{padding:12px 12px;border-top:1px solid #f0f0f0;text-align:left;font-size:14px;line-height:1.5;word-break:break-word}
   .table th{background:#fafafa;color:#444;border-top:0}
   .table tr:hover td{background:#fafcff}
-  /* 이름 칸: 한 글자 줄바꿈 방지 */
-  .table th:nth-child(2),.table td:nth-child(2){white-space:nowrap;word-break:keep-all;overflow:hidden;text-overflow:ellipsis}
+  /* 이름 칸은 절대 글자 단위 줄바꿈 X */
+  .table th:nth-child(2), .table td:nth-child(2){white-space:nowrap;word-break:keep-all;overflow:hidden;text-overflow:ellipsis}
 
   .pager{display:flex;gap:6px;flex-wrap:wrap;align-items:center;justify-content:flex-end;margin-top:10px}
   .pager button{background:#fff;color:#111;border-radius:8px;padding:8px 10px}
@@ -48,7 +48,8 @@
     .wrap{padding:16px}
     .table{min-width:600px}
     .table th,.table td{padding:10px 10px;font-size:13px}
-    input[type="text"],button,select{padding:12px 14px}
+    button{padding:12px 14px}
+    input[type="text"]{padding:12px 14px;font-size:16px}
   }
   @media (max-width:420px){
     .table{min-width:520px}
@@ -65,13 +66,13 @@
         <input id="q" type="text" placeholder="이름을 입력하세요 (예: 홍길동)" enterkeyhint="search" autofocus>
         <button id="btn">검색</button>
       </div>
+
       <select id="batchFilter" title="차수 필터">
         <option value="ALL">전체 차수</option>
       </select>
 
       <!-- 관리자 전용 버튼(관리자 모드에서만 보임) -->
       <div id="adminBtns" class="hidden">
-        <button id="hideBatch" class="ghost" title="차수 숨기기">차수 숨기기</button>
         <button id="restore" class="ghost" title="숨긴 차수 복원">숨긴 차수 복원</button>
         <button id="saveConfig" class="ghost" title="숨긴 차수 저장(config.json)">숨긴 차수 저장</button>
       </div>
@@ -113,18 +114,18 @@ const CSV_URL    = "data/participants.csv";
 const XLSX_URL   = "data/participants.xlsx";
 const CONFIG_URL = "data/config.json"; // {"hidden_batches":["1차수", ...]}
 
-/* ✅ 차수→일정(괄호) 표기 맵 */
-const BATCH_DATES = {
-  "1":"8/25(월)~8/26(화)",
-  "2":"8/27(수)~8/28(목)",
-  "3":"9/1(월)~9/2(화)",
-  "4":"9/8(월)~9/9(화)",
-  "5":"9/10(수)~9/11(목)",
-  "6":"9/15(월)~9/16(화)",
-  "7":"9/17(수)~9/18(목)",
-  "8":"9/22(월)~9/23(화)",
-  "9":"9/29(월)~9/30(화)",
-  "10":"10/1(수)~10/2(목)"
+/* ===== 차수 날짜 매핑 ===== */
+const batchDates = {
+  "1": "8/25(월)~8/26(화)",
+  "2": "8/27(수)~8/28(목)",
+  "3": "9/1(월)~9/2(화)",
+  "4": "9/8(월)~9/9(화)",
+  "5": "9/10(수)~9/11(목)",
+  "6": "9/15(월)~9/16(화)",
+  "7": "9/17(수)~9/18(목)",
+  "8": "9/22(월)~9/23(화)",
+  "9": "9/29(월)~9/30(화)",
+  "10": "10/1(수)~10/2(목)"
 };
 
 /* ===== 별칭 ===== */
@@ -161,16 +162,25 @@ function unique(arr){ return Array.from(new Set(arr)); }
 function toNumberFirst(s){ const m=(s||"").match(/\d+/); return m ? parseInt(m[0],10) : Number.POSITIVE_INFINITY; }
 function sortByBatchThenName(list){
   return list.slice().sort((a,b)=>{
-    const na=toNumberFirst(a["차수"]); const nb=toNumberFirst(b["차수"]);
-    if(na!==nb) return na-nb;
+    const na = toNumberFirst(a["차수"]);
+    const nb = toNumberFirst(b["차수"]);
+    if (na !== nb) return na - nb;
     return (a["성명"]||"").localeCompare(b["성명"]||"", "ko");
   });
 }
-function formatBatchWithDate(batchValue){
-  const numMatch = String(batchValue||"").match(/\d+/);
-  const num = numMatch ? numMatch[0] : null;
-  const date = num ? BATCH_DATES[num] : null;
-  return date ? `${batchValue} (${date})` : String(batchValue||"");
+function sortBatches(list){
+  return list.slice().sort((a,b)=>{
+    const na=toNumberFirst(a), nb=toNumberFirst(b);
+    if (na!==nb) return na-nb;
+    return (a||"").localeCompare(b||"ko");
+  });
+}
+function formatBatchDisplay(b){
+  if(!b) return "";
+  const num = String(toNumberFirst(b));
+  const date = batchDates[num];
+  const base = String(b); // 데이터에 '1' 또는 '1차수' 등 그대로 표시
+  return date ? `${base} (${date})` : base;
 }
 
 /* ===== 헤더 자동 탐색/매핑 ===== */
@@ -257,7 +267,7 @@ function effectiveHidden(){ return isAdmin ? hiddenBatchesWorking : hiddenBatche
 function filteredSearchItems(){
   const term=norm($("#q").value);
   const key=term.replace(/\s+/g,"").toLowerCase();
-  const sel=$("#batchFilter").value; // ALL or 특정 차수(원본 값)
+  const sel=$("#batchFilter").value; // ALL or 특정 차수
   const hide=effectiveHidden();
   const list = rows.filter(r=>{
     if(hide.has(norm(r["차수"]))) return false;
@@ -265,7 +275,7 @@ function filteredSearchItems(){
     const okBatch = sel==="ALL" ? true : (r["차수"]===sel);
     return okName && okBatch;
   });
-  return sortByBatchThenName(list);
+  return sortByBatchThenName(list); // 1→10 차수 순
 }
 
 function renderTable(items){
@@ -289,7 +299,7 @@ function renderTable(items){
 
   slice.forEach(r=>{
     const tr=document.createElement("tr");
-    tr.innerHTML=`<td>${formatBatchWithDate(r["차수"])}</td><td>${r["성명"]||""}</td><td>${r["소속부문"]||""}</td><td>${r["부서명"]||""}</td>`;
+    tr.innerHTML=`<td>${formatBatchDisplay(r["차수"])}</td><td>${r["성명"]||""}</td><td>${r["소속부문"]||""}</td><td>${r["부서명"]||""}</td>`;
     body.appendChild(tr);
   });
 
@@ -314,11 +324,78 @@ function renderTable(items){
 
 function renderSearch(){ renderTable(filteredSearchItems()); }
 
-/* ===== 차수 필터 옵션 구성(라벨에 날짜 포함) ===== */
+/* ===== 차수 필터 옵션 표시 (괄호 날짜 포함) ===== */
 function populateBatchFilter(){
   const sel=$("#batchFilter"); const prev=sel.value||"ALL";
-  const all = unique(rows.map(r=>r["차수"]).filter(Boolean))
-              .sort((a,b)=>toNumberFirst(a)-toNumberFirst(b));
-  sel.innerHTML = `<option value="ALL">전체 차수</option>` +
-    all.map(b=>{
-      const optLabel = fo
+  const all=sortBatches(unique(rows.map(r=>r["차수"]).filter(Boolean)));
+  sel.innerHTML=`<option value="ALL">전체 차수</option>`+
+    all.map(b=>`<option value="${b}">${formatBatchDisplay(b)}</option>`).join("");
+  if(["ALL",...all].includes(prev)) sel.value=prev; else sel.value="ALL";
+}
+
+/* ===== 수동 매핑 UI ===== */
+function openMapModal(){
+  const m=$("#modal"); m.style.display="flex";
+  const mapRows=$("#mapRows"); mapRows.innerHTML="";
+  required.forEach(want=>{
+    const label=document.createElement("div"); label.textContent=want;
+    const sel=document.createElement("select");
+    const opt=document.createElement("option"); opt.value=""; opt.textContent="(선택 없음)"; sel.appendChild(opt);
+    headerRaw.forEach(h=>{
+      const o=document.createElement("option"); o.value=h; o.textContent=h;
+      if(colMap[want]===h) o.selected=true;
+      sel.appendChild(o);
+    });
+    sel.addEventListener("change",()=>{ colMap[want]=sel.value||null; });
+    mapRows.appendChild(label); mapRows.appendChild(sel);
+  });
+}
+function closeMapModal(){ const m=$("#modal"); m.style.display="none"; }
+
+/* ===== config.json 저장(관리자) ===== */
+function downloadConfig(){
+  const json=JSON.stringify({ hidden_batches: Array.from(hiddenBatchesWorking) }, null, 2);
+  const blob=new Blob([json],{type:"application/json;charset=utf-8"});
+  const a=document.createElement("a"); a.href=URL.createObjectURL(blob); a.download="config.json";
+  a.click(); URL.revokeObjectURL(a.href);
+  alert("config.json이 내려받기 되었습니다. data/config.json 으로 업로드하면 전 방문자에게 적용됩니다.");
+}
+
+/* ===== 이벤트 ===== */
+$("#btn").addEventListener("click", ()=>{ currentPage=1; renderSearch(); });
+$("#q").addEventListener("keydown", e=>{ if(e.key==="Enter"){ currentPage=1; renderSearch(); } });
+$("#batchFilter").addEventListener("change", ()=>{ currentPage=1; renderSearch(); });
+$("#gear").addEventListener("click", openMapModal);
+$("#cancel").addEventListener("click", closeMapModal);
+$("#saveMap").addEventListener("click", ()=>{
+  const headerIdx=pickHeaderIndex(rawTable);
+  const header=(rawTable[headerIdx]||[]).map(v=>norm(v));
+  const data=rawTable.slice(headerIdx+1);
+  rows=applyMap(header,data,colMap);
+  closeMapModal(); populateBatchFilter(); currentPage=1; renderSearch();
+});
+$("#restore").addEventListener("click", ()=>{
+  const all=sortBatches(unique(rows.map(r=>r["차수"]).filter(Boolean)));
+  const hidden=all.filter(b=>hiddenBatchesWorking.has(norm(b)));
+  if(!hidden.length){ alert("숨긴 차수가 없습니다."); return; }
+  const name=prompt(`복원할 차수를 입력하세요:\n${hidden.join(", ")}`);
+  if(!name) return;
+  hiddenBatchesWorking.delete(norm(name)); renderSearch();
+});
+$("#saveConfig").addEventListener("click", downloadConfig);
+
+/* ===== 초기화 ===== */
+(async function init(){
+  if(isAdmin){ $("#adminBtns").classList.remove("hidden"); }
+
+  await loadData();
+  populateBatchFilter();
+  currentPage=1;
+  renderSearch();
+
+  const preset=params.get("name");
+  if(preset){ $("#q").value=preset; currentPage=1; renderSearch(); }
+})();
+</script>
+</body>
+</html>
