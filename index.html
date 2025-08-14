@@ -38,6 +38,30 @@
   #modal h2{margin:0 0 12px;font-size:18px}
   #mapRows{display:grid;grid-template-columns:140px 1fr;gap:10px;align-items:center;margin:10px 0}
   .hidden{display:none}
+ html { -webkit-text-size-adjust: 100%; }
+  .table { table-layout: fixed; min-width: 720px; }
+  #resultsWrap,
+  #rosterBody section {
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+  }
+  .table th, .table td {
+    word-break: break-word;
+  }
+  .table th:nth-child(2),
+  .table td:nth-child(2) {
+    white-space: nowrap;
+    word-break: keep-all;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  @media (max-width: 768px) {
+    .wrap { padding: 16px; }
+    .table { min-width: 600px; }
+  }
+  @media (max-width: 420px) {
+    .table { min-width: 520px; }
+  }
 </style>
 </head>
 <body>
